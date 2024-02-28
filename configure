@@ -1,0 +1,32 @@
+#!/bin/sh
+
+solvers=`ls */solver.cpp|sed -e 's,/solver.cpp,,g'`
+
+for solver in $solvers
+do
+  cd $solver && ./configure $* &
+done
+
+exec 1>makefile
+cat <<EOF
+all:
+clean:
+	rm -f makefile
+EOF
+for solver in $solvers
+do 
+cat <<EOF
+make-${solver}-all:
+	+make -C $solver all
+make-${solver}-clean:
+	+make -C $solver clean
+make-${solver}-test:
+	+make -C $solver test
+all: make-${solver}-all
+test: make-${solver}-test
+clean: make-${solver}-clean
+.PHONY: make-${solver}-all make-${solver}-test make-${solver}-clean
+EOF
+done
+
+wait

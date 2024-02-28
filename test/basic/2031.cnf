@@ -1,0 +1,10 @@
+c model count: 8
+c
+c 1000.cnf with projection
+c
+p cnf 8 5
+-5 3 0
+5 4 0
+-7 -4 0
+-5 7 0
+4 -3 0

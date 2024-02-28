@@ -1,0 +1,15 @@
+#!/bin/sh
+die () {
+  echo "generate: error: $*" 2>&1
+  exit 1
+}
+[ -f ../VERSION ] || die "could not find '../VERSION' file"
+[ -f makefile ] || die "could not fine 'makefile'"
+VERSION="`cat ../VERSION`"
+GITID="0"
+BUILD="`sed '/^COMPILE/!d;s,^COMPILE=,,;s, -I.*,,' makefile`"
+cat <<EOF
+#define VERSION "$VERSION"
+#define GITID "$GITID"
+#define BUILD "$BUILD"
+EOF

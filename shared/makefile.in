@@ -1,0 +1,18 @@
+COMPILE=@CXX@ @CXXFLAGS@ -I. -I../shared
+LIBS=@LIBS@
+all: solver
+solver: solver.o shared.o config.o makefile
+	$(COMPILE) -o $@ solver.o shared.o config.o -lgmp
+solver.o: solver.cpp ../shared/*.hpp makefile
+	$(COMPILE) -c $<
+shared.o: ../shared/shared.cpp ../shared/*.hpp makefile
+	$(COMPILE) -c $<
+config.hpp: ../VERSION ../shared/generate makefile
+	../shared/generate > $@
+config.o: ../shared/config.cpp ../shared/*.hpp config.hpp makefile
+	$(COMPILE) -c $<
+clean:
+	rm -rf *.o solver makefile config.hpp log
+test: all
+	../test/test.sh
+.PHONY: all clean test
