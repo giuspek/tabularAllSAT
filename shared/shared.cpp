@@ -313,6 +313,7 @@ void Shared::add (int elit, bool backtrue) {
   } else {
     for(auto l: imported)
       debug ("imported literal %s", debug_literal (l));
+    counter = 0;
     added_original_clauses++;
     assert (clause.empty ());
     bool tautological = false;

@@ -34,7 +34,7 @@ class Heap
     if (b == INVALID)
       return a;
     unsigned parent, child;
-    if ((nodes[b].score + 0.5 * nodes[b].DLCS) > (nodes[a].score + 0.5 * nodes[a].DLCS) || ((nodes[b].score + 0.5 * nodes[b].DLCS) == (nodes[a].score + 0.5 * nodes[a].DLCS) && nodes[b].watched && !nodes[a].watched))
+    if ((nodes[b].score + 0.5 * nodes[b].DLCS) > (nodes[a].score + 0.5 * nodes[a].DLCS) || ((nodes[b].score + 0.5 * nodes[b].DLCS) == (nodes[a].score + 0.5 * nodes[a].DLCS) && nodes[b].watched && !nodes[a].watched) || ((nodes[b].score + 0.5 * nodes[b].DLCS) == (nodes[a].score + 0.5 * nodes[a].DLCS) && nodes[b].watched == nodes[a].watched && b < a))
       parent = b, child = a;
     else
       parent = a, child = b;
@@ -178,9 +178,11 @@ public:
       nodes.push_back(Node(1.0, DLCS_score[idx], watched[idx]));
       idx++;
     }
-    while (idx != old_size)
+    idx = old_size;
+    while (idx != variables)
     {
-      push(--idx);
+      push(idx);
+      idx++;
     }
   }
 
