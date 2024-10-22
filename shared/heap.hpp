@@ -13,10 +13,13 @@ class Heap
   {
     double score;
     double DLCS;
-    bool watched;
+    unsigned watched;
+    unsigned important;
     unsigned cc_value;
     unsigned child = INVALID, prev = INVALID, next = INVALID;
-    Node(double s = 0, double d = 0, bool b = false) : score(s), DLCS(d), watched(b) {}
+    Node(double s = 0, double d = 0, unsigned b = 0, unsigned i = 0) : score(s), DLCS(d), watched(b), important(i)
+    {
+    }
   };
 
   const double limit = 1e150;
@@ -34,8 +37,14 @@ class Heap
     if (b == INVALID)
       return a;
     unsigned parent, child;
-    if ((nodes[b].score + 0.5 * nodes[b].DLCS) > (nodes[a].score + 0.5 * nodes[a].DLCS) || ((nodes[b].score + 0.5 * nodes[b].DLCS) == (nodes[a].score + 0.5 * nodes[a].DLCS) && nodes[b].watched && !nodes[a].watched) || ((nodes[b].score + 0.5 * nodes[b].DLCS) == (nodes[a].score + 0.5 * nodes[a].DLCS) && nodes[b].watched == nodes[a].watched && b < a))
+    if (
+        (nodes[b].important > nodes[a].important) ||
+        ((nodes[b].important == nodes[a].important) && (nodes[b].score + 0.5 * nodes[b].DLCS) > (nodes[a].score + 0.5 * nodes[a].DLCS)) || 
+        ((nodes[b].important == nodes[a].important) && (nodes[b].score + 0.5 * nodes[b].DLCS) == (nodes[a].score + 0.5 * nodes[a].DLCS) && nodes[b].watched > nodes[a].watched) ||
+        ((nodes[b].important == nodes[a].important) && (nodes[b].score + 0.5 * nodes[b].DLCS) == (nodes[a].score + 0.5 * nodes[a].DLCS) && nodes[b].watched == nodes[a].watched && b > a)
+      ){
       parent = b, child = a;
+      }
     else
       parent = a, child = b;
     auto &node_parent = nodes[parent];
@@ -154,7 +163,9 @@ public:
 
   double score(unsigned idx) const { return nodes[idx].score + 1.5 * nodes[idx].DLCS; }
 
-  bool is_watched(unsigned idx) const { return nodes[idx].watched; }
+  char is_watched(unsigned idx) const { return nodes[idx].watched; }
+
+  char is_important(unsigned idx) const { return nodes[idx].important; }
 
   bool contains(unsigned idx) const
   {
@@ -170,19 +181,19 @@ public:
     assert(contains(idx));
   }
 
-  void resize(unsigned variables, std::vector<unsigned> DLCS_score, std::vector<bool> watched)
+  void resize(unsigned variables, std::vector<unsigned> DLCS_score, std::vector<bool> watched, std::vector<unsigned> important)
   {
     unsigned old_size = nodes.size(), idx = old_size;
+
     while (idx != variables)
     {
-      nodes.push_back(Node(1.0, DLCS_score[idx], watched[idx]));
-      idx++;
+      Node n = Node(1.0, DLCS_score[idx], watched[idx], important[idx]);
+      nodes.push_back(n);
+      idx++;  
     }
-    idx = old_size;
-    while (idx != variables)
+    while (idx != old_size)
     {
-      push(idx);
-      idx++;
+      push(--idx);
     }
   }
 
@@ -209,6 +220,19 @@ public:
     increment *= factor;
     if (increment > limit)
       rescore(increment);
+  }
+
+  unsigned get_size(){
+    return nodes.size();
+  }
+
+  void get_DLCS_scores(){
+    // printf all scores
+    printf("DLCS SCORES\n");
+    for (unsigned i = 0; i < nodes.size(); i++)
+    {
+      printf("NODE %d: %d (watched? %d)\n", i, nodes[i].DLCS, nodes[i].watched);
+    }
   }
 };
 

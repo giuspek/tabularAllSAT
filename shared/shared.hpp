@@ -307,14 +307,17 @@ protected:                      // Code used by each solver variant.
   bool simplify_clause ();              // Returns 'false' if tautological.
 
   size_t added_original_clauses = 0;    // Number of added original clauses.
+  size_t added_original_non_binary_clauses = 0;    // Number of added original clauses.
 
   int verbosity = 0;		// Negative if 'quiet'.
   bool model_count_flag = false;
   char debug_info = 0;
   bool assignment_count_flag = false;
   bool projected = false;
+  unsigned projected_count = 0;
   std::vector<unsigned> DLCS;
   std::vector<bool> initial_watched;
+  std::vector<unsigned> important;
   std::vector<bool> positive_polarity;
   std::vector<bool> negative_polarity;
   char counter = 0;

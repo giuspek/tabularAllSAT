@@ -297,6 +297,7 @@ void Shared::add (int elit, bool backtrue) {
   if (state != READY && state != ADDING)
     error ("can not call 'add (%d)' in '%s' state",
            elit, decode_state (state));
+
   if (state != ADDING) transition (ADDING);
 #ifndef NDEBUG
   original.push_back (elit);
@@ -313,6 +314,7 @@ void Shared::add (int elit, bool backtrue) {
   } else {
     for(auto l: imported)
       debug ("imported literal %s", debug_literal (l));
+
     counter = 0;
     added_original_clauses++;
     assert (clause.empty ());
@@ -394,7 +396,7 @@ struct Parser
   FILE * file;
   size_t lineno = 0, litlineno = 0;
   
-  int & variables, clauses = 0, last = '\n';
+  int & variables, clauses = 0, important_size = 0, last = '\n';
   Parser (Shared & s, FILE * f, int & m) :
     shared (s), file (f), variables (m) { }
   int get_char () {
@@ -533,6 +535,13 @@ const char * Parser::parse () {
     return error ("maximum number of variables exceeded");
   if (!get_int (clauses, ch = get_char ()) || clauses < 0)
     return error ("expected number of clauses");
+  if (ch == ' '){
+    if (!get_int (important_size, ch = get_char ()) || important_size < 0 || important_size > variables)
+      //return error ("expected number of important atoms (projected enumeration)");
+      {}
+    else
+      shared.projected = true; 
+  } 
   if (ch != '\n')
     do {
       if (ch == EOF)
@@ -542,24 +551,58 @@ const char * Parser::parse () {
 	return error ("invalid character after header before end-of-line");
       ch = get_char ();
     } while (ch != '\n');
-  shared.message (0, "parsed header 'p cnf %d %d'", variables, clauses);
+  if (!shared.projected)
+    shared.message (0, "parsed header 'p cnf %d %d'", variables, clauses);
+  else
+    shared.message (0, "parsed header 'p cnf %d %d %d'", variables, clauses, important_size);
   shared.resize (variables);
   shared.DLCS.resize(variables, 0);
   shared.positive_polarity.resize(variables);
   shared.negative_polarity.resize(variables);
   shared.initial_watched.resize(variables);
+  shared.important.resize(variables);
+
+  if (shared.projected == true)
+    shared.important.resize(variables, false);
+  else
+    shared.important.resize(variables, true);
+  
+  // projected extension
+  while (shared.projected && (ch = get_char()) == 'c') {
+    for (const char * p = " p show "; *p; p++){
+      if (get_char () != *p){
+        // This is a regular comment line, skip it
+        while (ch != '\n' && ch != EOF) ch = get_char();
+        if (ch != '\n') return error("invalid character in comment line");
+      }
+    }
+    while (ch != '\n' && ch != EOF) {
+      int var;
+      if (!get_int(var, ch = get_char()) || var <= 0){
+        return error("expected positive variable number in 'c p show' line");
+      }
+      if (var > variables)
+        return error("too many important variables");
+
+      shared.important[var - 1] = true;
+      shared.projected_count++;
+    }
+    if (ch != '\n') return error("invalid character in 'c p show' line");
+  } 
+
   int elit = 0, parsed = 0;
-  while ((ch = get_char ()) != EOF) {
+  while (ch != EOF) {
     if (shared.terminated) return 0;
     if (ch == 'c') {
 SKIP_COMMENT:
       while ((ch = get_char ()) != '\n')
 	if (ch == '\r') return no_new_line_after_carriage_return ();
 	else if (ch == EOF) return end_of_file_in_comment ();
+      ch = get_char ();
       continue;
     }
     if (ch == '\r') return no_new_line_after_carriage_return ();
-    if (ch == ' ' || ch == '\t' || ch == '\n') continue;
+    if (ch == ' ' || ch == '\t' || ch == '\n'){ ch = get_char (); continue;}
     if (ch != '-' && !isdigit (ch))
       return error ("expected literal or comment");
     if (!get_int (elit, ch)) return invalid_literal ();
@@ -574,6 +617,8 @@ SKIP_COMMENT:
     parsed += !elit;
     shared.add (elit);
     if (ch == 'c') goto SKIP_COMMENT;
+
+    ch = get_char ();
   }
   if (elit) {
     assert (litlineno), lineno = litlineno;
@@ -582,6 +627,7 @@ SKIP_COMMENT:
   if (parsed != clauses) return error ("clause missing");
   if (parsed == 1) shared.message (0, "parsed single clause");
   else shared.message (0, "parsed all %d clauses", parsed);
+
   return 0;
 }
 

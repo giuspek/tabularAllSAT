@@ -1,0 +1,2 @@
+pysmt
+allsat-cnf @ git+https://github.com/masinag/allsat-cnf

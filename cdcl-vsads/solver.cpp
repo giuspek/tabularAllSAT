@@ -3,11 +3,13 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 
 #include <algorithm>
 #include <vector>
 #include <set>
 #include <gmpxx.h>
+#include <iostream>
 
 #include "arena.hpp"
 #include "compact.hpp"
@@ -15,6 +17,7 @@
 #include "shared.hpp"
 
 // Core data structure for clauses.
+bool debugging = false;
 
 struct Clause
 {
@@ -215,7 +218,8 @@ struct SolverOptions : Options
   Option tier1_max_glue = Option("tier1-max-glue", 2, 0, INT_MAX, "tier1 glucose level for always kept clauses");
   Option tier2_max_glue = Option("tier2-max-glue", 6, 0, INT_MAX, "tier2 glucose level for clauses with second chance");
   Option vsids_decay = Option("vsids-decay", 50, 0, 500, "VSIDS scores decay (alpha) in per mille");
-  Option *end() { return 1 + &vsids_decay; }
+  Option output_file = Option("output-file", 0, 0, 1, "set if printing models as stdout (0) or in output.txt (1)");
+  Option *end() { return 1 + &output_file; }
 };
 
 // Decision control stack frame.
@@ -237,6 +241,8 @@ class Solver : public Shared
   bool initialized = false;  // Limits need to be initialized.
   bool iterating = false;    // Learned unit clause.
 
+  bool enumerate_total = false;
+
   std::vector<Frame> control; // One frame per decision level.
 
   unsigned propagated = 0; // Propagated literals in 'trail'.
@@ -244,6 +250,8 @@ class Solver : public Shared
 
   unsigned best_assigned = 0;
   unsigned target_assigned = 0;
+  unsigned aggressive_level_limit = 0;
+  unsigned lit_to_flip;
 
   Clauses clauses;                // The clause data memory arena.
   std::vector<References> matrix; // Maps literals to references.
@@ -252,7 +260,7 @@ class Solver : public Shared
   std::vector<Phase> phases;      // Maps variables to phases.
   std::vector<Flags> flags;       // Maps variables to flags.
   std::vector<int> position;
-
+  
   Heap heap; // Decision priority heap.
 
   std::vector<unsigned> analyzed; // Variables analyzed.
@@ -347,7 +355,12 @@ class Solver : public Shared
   State cdcl();
   bool block_chrono(unsigned M);
   mpz_class get_models_covered_by_assignment(unsigned length);
+  int to_dimacs(unsigned lit);
   unsigned get_implicant_lifting();
+  unsigned get_aggressive_implicant_lifting();
+  unsigned get_aggressive_projected_implicant_lifting();
+  unsigned get_aggressive_projected_implicant_lifting_bis();
+  unsigned get_projection_lifting();
   void initialize_internal_solving();
 
   friend struct less_relevant;
@@ -355,10 +368,10 @@ class Solver : public Shared
   // The six virtual functions of 'Interface' called from 'Shared'
   // functions are here.  The other functions above are all private.
 
-  const char *one_word_name() { return "TabularAllSAT"; }
+  const char *one_word_name() { return "TabularAllSAT+"; }
   const char *one_line_description()
   {
-    return "TabularAllSAT: CB-CDCL AllSAT Solver without blocking clauses";
+    return "TabularAllSAT+: CB-CDCL AllSAT Solver without blocking clauses";
   }
   void adjust_to_increased_variables();
   void add_simplified_irredundant_clause();
@@ -580,6 +593,7 @@ Reference Solver::new_binary(bool backreason)
   assert(clause.size() == 2);
   unsigned lit = clause[0], other = clause[1];
   debug_binary(lit, other, "new binary clause");
+
   if (!backreason)
   {
     watch_binary(lit, other);
@@ -598,6 +612,10 @@ void Solver::bump_clause(Clause *c)
 
 Reference Solver::new_clause(bool redundant, unsigned glue, bool backreason)
 {
+
+  if (!redundant)
+    added_original_non_binary_clauses+=1;
+
   size_t size = clause.size();
   assert(3 <= size);
   assert(size <= MAXIMUM_INTERNAL_VARIABLE);
@@ -653,6 +671,16 @@ Reference Solver::new_clause(bool redundant, unsigned glue, bool backreason)
 void Solver::add_simplified_irredundant_clause()
 {
   size_t size = clause.size();
+  if (size > 1){
+    unsigned lit = clause[0];
+    unsigned other = clause[1];
+    int idx1 = index(lit) + 1;
+    if (lit % 2 == 1)
+      idx1 = -idx1;
+    int idx2 = index(other) + 1;
+    if (other % 2 == 1)
+      idx2 = -idx2;
+  }
   if (!size)
   {
     debug("parsed empty clause");
@@ -662,6 +690,10 @@ void Solver::add_simplified_irredundant_clause()
   {
     unsigned unit = clause[0];
     debug("parsed unit clause %s", debug_literal(unit));
+
+    int idx = index(unit) + 1;
+    if (unit % 2 == 1)
+      idx = -idx;
     assert(!level);
     assign(unit, UNIT_REASON);
   }
@@ -814,6 +846,7 @@ void Solver::decide()
   statistics.decisions++;
 
   unsigned decision = decide_variable();
+
   decision = decide_phase(decision);
   debug("decision %s", debug_literal(decision));
 
@@ -938,7 +971,12 @@ struct larger_score
   larger_score(const Heap &h) : heap(h) {}
   bool operator()(unsigned a, unsigned b)
   {
-    return ((heap.score(a) > heap.score(b)) || (heap.score(a) == heap.score(b) && heap.is_watched(a) && !heap.is_watched(b)));
+    return (
+      (heap.is_important(a) > heap.is_important(b)) ||
+      (heap.is_important(a) == heap.is_important(b) && heap.score(a) > heap.score(b)) ||
+      (heap.is_important(a) == heap.is_important(b) && heap.score(a) == heap.score(b) && heap.is_watched(a) && !heap.is_watched(b)) ||
+      (heap.is_important(a) == heap.is_important(b) && heap.score(a) == heap.score(b) && heap.is_watched(a) == heap.is_watched(b) && b > a)
+    );
   }
 };
 
@@ -1170,7 +1208,7 @@ bool Solver::analyze_conflict(unsigned falsified, Reference reason)
   std::vector<unsigned> reinserting_reasons;
   if (size == 1){
     for (auto lit: trail){
-      if (index(lit) != index(not_uip) && (reasons[index(lit)] == DECISION_REASON || (reasons[index(lit)] == BACKTRUE_REASON && levels[index(lit)] < levels[index(not_uip)]))){
+      if (index(lit) != index(not_uip) && important[index(lit)] != 0 && (reasons[index(lit)] == DECISION_REASON || (reasons[index(lit)] == BACKTRUE_REASON && levels[index(lit)] < levels[index(not_uip)]))){
         reinserting_lits.push_back(lit);
         reinserting_reasons.push_back(reasons[index(lit)]);
       }
@@ -1191,6 +1229,7 @@ bool Solver::analyze_conflict(unsigned falsified, Reference reason)
 
   assign(not_uip, learned);
 
+
   if (size == 1){
     for (unsigned i = 0; i < reinserting_lits.size(); i++){
       if (reinserting_reasons[i] == DECISION_REASON){
@@ -1201,6 +1240,8 @@ bool Solver::analyze_conflict(unsigned falsified, Reference reason)
     }
   }
 
+  aggressive_level_limit = level;
+  
   bump_analyzed_variables();
 
   for (auto idx : analyzed)
@@ -1723,40 +1764,86 @@ bool Solver::block_chrono(unsigned M)
   }
 
   unsigned jump = M - 1;
-  backtrack(jump);
+  unsigned lit = control[M].decision;
 
-  assign(negate(control[M].decision), BACKTRUE_REASON);
+  backtrack(jump);
+  aggressive_level_limit = level;
+  
+  if (lit != lit_to_flip){
+    assign(negate(lit), BACKTRUE_REASON);
+    // assign(negate(lit_to_flip), BACKTRUE_REASON);
+  }
+  else
+    assign(negate(lit), BACKTRUE_REASON);
   return false;
 }
 
-unsigned Solver::get_implicant_lifting()
-{
-  // std::set<unsigned> removed;
-  unsigned M = 0;
 
-  unsigned size = trail.size();
-  for(int idx = size - 1; idx >= 0; idx--)
+unsigned Solver::get_aggressive_projected_implicant_lifting_bis(){
+  std::vector<unsigned> copy_trail;
+  std::vector<unsigned> copy_trail2;
+
+  if (level == 0)
   {
+    return level;
+  }
+
+  for (auto lit : trail){
+    copy_trail.push_back(lit);
+    copy_trail2.push_back(lit);
+  }
+
+  std::set<unsigned> trail_minimal_set;
+
+  std::vector<References> W(literals);
+  std::vector<unsigned> N(added_original_non_binary_clauses);
+  
+  unsigned size = trail.size();
+
+  unsigned base = 0;
+
+  for (unsigned i = 0; i < added_original_non_binary_clauses; i++){
+    Clause *c = clauses[base];
+    if (c->redundant)
+      continue;
+    for (int j = 0; j < c->size; j++){
+      unsigned lit = c->literals[j];
+      if (values[lit] > 0){
+        W[lit].push_back(i);
+        N[i]++;
+      }
+    }
+    base += Clause::bytes(c->size) / 4;
+  }
+
+  // TRY TO REMOVE ONLY IMPORTANT
+  for(int idx = size - 1; idx >= 0; idx--){
+
     unsigned lit = trail[idx];
-    if (levels[index(lit)] <= M)
-    {
-      if (levels[index(lit)] == 0 || (levels[index(lit)] == M && reasons[index(lit)] == DECISION_REASON))
-        break;
+
+    if (levels[index(lit)] <= aggressive_level_limit){
+      trail_minimal_set.insert(lit);
       continue;
     }
-    if (reasons[index(lit)] != DECISION_REASON)
-    {
-      if (levels[index(lit)] > M)
-        M = levels[index(lit)];
+
+    if (projected && important[index(lit)] == 0){
+      trail_minimal_set.insert(lit);
       continue;
     }
-    if (matrix[lit].size() == 0)
+
+    if (reasons[index(lit)] == BACKTRUE_REASON){
+      trail_minimal_set.insert(lit);
       continue;
-    
+    }
+
+    copy_trail.erase(copy_trail.begin() + idx);
+
     auto &not_lit_watches = matrix[lit];
     auto begin_not_lit_watches = not_lit_watches.begin();
     auto end_not_lit_watches = not_lit_watches.end();
     auto p = begin_not_lit_watches, q = p;
+    bool one_binary_require_lit = false;
+
     while (p != end_not_lit_watches)
     {
 
@@ -1768,49 +1855,454 @@ unsigned Solver::get_implicant_lifting()
         // Binary clause: other is for sure in implicant
         unsigned other = untag(watch);
         signed char other_value = values[other];
-        if (other_value <= 0 || position[index(other)] > idx)
+        if (other_value <= 0 || std::find(copy_trail2.begin(), copy_trail2.end(), other) == copy_trail2.end())
         {
-          if (levels[index(lit)] > M)
-            M = levels[index(lit)];
-          break;
-        }
-        else
-        {
-          if (levels[index(other)] > M)
-            M = levels[index(other)];
+          trail_minimal_set.insert(lit);
+          one_binary_require_lit = true;
           continue;
         }
       }
       else
       {
+        // We skip it since we use the De Harbe algorithm for normal clauses
+        *q++;
+        *p++;
+      }
+    }
+
+    if(one_binary_require_lit){
+      continue;
+    }
+    
+    // TODO: GET ERROR HERE!
+    bool one_clause_require_lit = false;
+    // De Harbe algorithm
+    for (auto ref : W[lit]){
+      if (N[ref] == 1){
+        trail_minimal_set.insert(lit);
+        one_clause_require_lit = true;
+        break;
+      } 
+    }
+
+    if (!one_clause_require_lit){
+      for (auto ref : W[lit]){
+        N[ref]--;
+      }
+    }
+
+  }
+
+  backtrack(aggressive_level_limit);
+
+  unsigned falsified;
+  Reference conflict;
+  for (unsigned i = 0; i < copy_trail2.size(); i++){
+    unsigned lit = copy_trail2[i];
+    if (levels[index(lit)] <= aggressive_level_limit){
+      continue;
+    }
+    if (trail_minimal_set.find(lit) != trail_minimal_set.end() && !values[lit] && !values[negate(lit)]){
+      if (projected && important[index(lit)] == 0)
+        continue;
+      if (reasons[index(lit)] == BACKTRUE_REASON){
+        assign(lit, BACKTRUE_REASON);
+        continue;
+      }
+      level++;
+      control.push_back(Frame(copy_trail2[i], trail.size()));
+      assign(lit, DECISION_REASON);
+      bool t = propagate(falsified, conflict);
+    }
+  }
+
+  return level;
+}
+
+
+
+unsigned Solver::get_aggressive_implicant_lifting(){
+  std::vector<unsigned> copy_trail;
+  std::vector<unsigned> copy_trail2;
+  std::vector<Reference> copy_reasons;
+
+  for (auto lit : trail){
+    copy_trail.push_back(lit);
+    copy_trail2.push_back(lit);
+    copy_reasons.push_back(reasons[index(lit)]);
+  }
+
+  std::set<unsigned> trail_minimal_set;
+
+  std::vector<References> W(literals);
+  std::vector<unsigned> N(added_original_non_binary_clauses);
+  
+  unsigned size = trail.size();
+
+  unsigned base = 0;
+
+  for (unsigned i = 0; i < added_original_non_binary_clauses; i++){
+    Clause *c = clauses[base];
+    if (c->redundant)
+      continue;
+    for (int j = 0; j < c->size; j++){
+      unsigned lit = c->literals[j];
+      if (values[lit] > 0){
+        W[lit].push_back(i);
+        N[i]++;
+      }
+    }
+    base += Clause::bytes(c->size) / 4;
+  }
+
+  // TRY TO REMOVE ONLY IMPORTANT
+  for(int idx = size - 1; idx >= 0; idx--){
+
+    unsigned lit = trail[idx];
+
+    copy_trail.erase(copy_trail.begin() + idx);
+
+    auto &not_lit_watches = matrix[lit];
+    auto begin_not_lit_watches = not_lit_watches.begin();
+    auto end_not_lit_watches = not_lit_watches.end();
+    auto p = begin_not_lit_watches, q = p;
+    bool one_binary_require_lit = false;
+
+    while (p != end_not_lit_watches)
+    {
+
+      // Get the watched clause and the blocking literal, plus its value
+      Reference watch = *q++ = *p++;
+
+      if (tagged(watch))
+      {
+        // Binary clause: other is for sure in implicant
+        unsigned other = untag(watch);
+        signed char other_value = values[other];
+        if (other_value <= 0 || std::find(copy_trail.begin(), copy_trail.end(), other) == copy_trail.end())
+        {
+          trail_minimal_set.insert(lit);
+          one_binary_require_lit = true;
+          continue;
+        }
+      }
+      else
+      {
+        // We skip it since we use the De Harbe algorithm for normal clauses
+        *q++;
+        *p++;
+      }
+    }
+
+    if(one_binary_require_lit){
+      continue;
+    }
+    
+    // TODO: GET ERROR HERE!
+    bool one_clause_require_lit = false;
+    // De Harbe algorithm
+    for (auto ref : W[lit]){
+      if (N[ref] == 1){
+        trail_minimal_set.insert(lit);
+        one_clause_require_lit = true;
+        break;
+      } 
+    }
+
+    if (!one_clause_require_lit){
+      for (auto ref : W[lit]){
+        N[ref]--;
+      }
+    }
+
+  }
+
+  // TODO: now remove element from trail that do not belong to trail_minimal_set
+  backtrack(0);
+
+  unsigned falsified;
+  Reference conflict;
+  for (unsigned i = 0; i < copy_trail2.size(); i++){
+    unsigned lit = copy_trail2[i];
+    if (trail_minimal_set.find(lit) != trail_minimal_set.end() && !values[lit] && !values[negate(lit)]){
+      if (projected && important[index(lit)] == 0)
+        continue;
+      level++;
+      #ifdef MATHSAT
+        if (has_event) { msat_dpll_callback_notify_new_level(event); }
+      #endif
+      control.push_back(Frame(copy_trail2[i], trail.size()));
+      assign(lit, DECISION_REASON);
+      bool t = propagate(falsified, conflict);
+    }
+  }
+
+  return level;
+}
+
+
+unsigned Solver::get_implicant_lifting()
+{
+  // std::set<unsigned> removed;
+  unsigned M = 0;
+
+  unsigned size = trail.size();
+  for(int idx = size - 1; idx >= 0; idx--)
+  {
+    unsigned lit = trail[idx];
+
+    if (reasons[index(lit)] != DECISION_REASON)
+    {
+      if (levels[index(lit)] > M)
+        if (!projected || important[index(lit)] == 1)
+          M = levels[index(lit)];
+      continue;
+    }
+    
+    if (matrix[lit].size() == 0)
+      continue;
+    
+    auto &not_lit_watches = matrix[lit];
+    auto begin_not_lit_watches = not_lit_watches.begin();
+    auto end_not_lit_watches = not_lit_watches.end();
+    auto p = begin_not_lit_watches, q = p;
+    while (p != end_not_lit_watches)
+    {
+      
+      // Get the watched clause and the blocking literal, plus its value
+      Reference watch = *q++ = *p++;
+      
+      if (tagged(watch))
+      {
+        // Binary clause: other is for sure in implicant
+        unsigned other = untag(watch);
+        signed char other_value = values[other];
+        if (other_value <= 0 || position[index(other)] > idx)
+        {
+          if (levels[index(lit)] > M)
+            if (!projected || important[index(lit)] == 1)
+              M = levels[index(lit)];
+            // break;
+        }
+        else
+        {
+          if (levels[index(other)] > M)
+            if (!projected || important[index(other)] == 1)
+              M = levels[index(other)];
+            continue;
+        }
+      }
+      else
+      {
         unsigned blocking = untag(*(p - 1));
-        Clause *c = dereference(*q++ = *p++);
+        Reference ref = *q++ = *p++;
+        Clause *c = dereference(ref);
         signed char blocking_value = values[blocking];
+        
         if (c->redundant)
           continue;
+
+        unsigned other = c->literals[0] == lit ? c->literals[1] : c->literals[0];
+
+        if (values[other] > 0)
+        {
+          q[-2] = tag_large(other);
+          blocking = other;
+          blocking_value = values[blocking];
+        }
+          
         if (blocking_value <= 0 || position[index(blocking)] > idx)
         {
           if (levels[index(lit)] > M)
-            M = levels[index(lit)];
-          break;
+            if (!projected || important[index(lit)] == 1)
+              M = levels[index(lit)];
+            // break;
         }
         else
         {
           if (levels[index(blocking)] > M)
-            M = levels[index(blocking)];
-          continue;
+            if (!projected || important[index(blocking)] == 1)
+              M = levels[index(blocking)];
+            continue;
         }
       }
     }
   }
+
   return M;
 }
+
+
+unsigned Solver::get_aggressive_projected_implicant_lifting(){
+  std::vector<unsigned> copy_trail;
+  std::vector<unsigned> copy_trail2;
+
+  if (level == 0)
+  {
+    return level;
+  }
+
+  for (auto lit : trail){
+    copy_trail.push_back(lit);
+    copy_trail2.push_back(lit);
+  }
+
+  std::set<unsigned> trail_minimal_set;
+
+  std::vector<References> W(literals);
+  std::vector<unsigned> N(added_original_non_binary_clauses);
+  
+  unsigned size = trail.size();
+
+  unsigned base = 0;
+
+  for (unsigned i = 0; i < added_original_non_binary_clauses; i++){
+    Clause *c = clauses[base];
+    if (c->redundant)
+      continue;
+    for (int j = 0; j < c->size; j++){
+      unsigned lit = c->literals[j];
+      if (values[lit] > 0){
+        W[lit].push_back(i);
+        N[i]++;
+      }
+    }
+    base += Clause::bytes(c->size) / 4;
+  }
+
+  // TRY TO REMOVE ONLY IMPORTANT
+  for(int idx = size - 1; idx >= 0; idx--){
+
+    unsigned lit = trail[idx];
+
+    if (important[index(lit)] == 0){
+      trail_minimal_set.insert(lit);
+      continue;
+    }
+
+    copy_trail.erase(copy_trail.begin() + idx);
+
+    auto &not_lit_watches = matrix[lit];
+    auto begin_not_lit_watches = not_lit_watches.begin();
+    auto end_not_lit_watches = not_lit_watches.end();
+    auto p = begin_not_lit_watches, q = p;
+    bool one_binary_require_lit = false;
+
+    while (p != end_not_lit_watches)
+    {
+
+      // Get the watched clause and the blocking literal, plus its value
+      Reference watch = *q++ = *p++;
+
+      if (tagged(watch))
+      {
+        // Binary clause: other is for sure in implicant
+        unsigned other = untag(watch);
+        signed char other_value = values[other];
+        if (other_value <= 0 || std::find(copy_trail.begin(), copy_trail.end(), other) == copy_trail.end())
+        {
+          trail_minimal_set.insert(lit);
+          one_binary_require_lit = true;
+          continue;
+        }
+      }
+      else
+      {
+        // We skip it since we use the De Harbe algorithm for normal clauses
+        *q++;
+        *p++;
+      }
+    }
+
+    if(one_binary_require_lit){
+      continue;
+    }
+    
+    // TODO: GET ERROR HERE!
+    bool one_clause_require_lit = false;
+    // De Harbe algorithm
+    for (auto ref : W[lit]){
+      if (N[ref] == 1){
+        trail_minimal_set.insert(lit);
+        one_clause_require_lit = true;
+        break;
+      } 
+    }
+
+    if (!one_clause_require_lit){
+      for (auto ref : W[lit]){
+        N[ref]--;
+      }
+    }
+
+  }
+
+  // TODO: now remove element from trail that do not belong to trail_minimal_set
+  backtrack(0);
+
+  unsigned falsified;
+  Reference conflict;
+  for (unsigned i = 0; i < copy_trail2.size(); i++){
+    unsigned lit = copy_trail2[i];
+    if (trail_minimal_set.find(lit) != trail_minimal_set.end() && !values[lit] && !values[negate(lit)]){
+      if (projected && important[index(lit)] == 0)
+        continue;
+      level++;
+      #ifdef MATHSAT
+        if (has_event) { msat_dpll_callback_notify_new_level(event); }
+      #endif
+      control.push_back(Frame(copy_trail2[i], trail.size()));
+      assign(lit, DECISION_REASON);
+      bool t = propagate(falsified, conflict);
+    }
+  }
+
+  return level;
+}
+
+
+unsigned Solver::get_projection_lifting()
+{
+  unsigned M = 0;
+
+  unsigned size = trail.size();
+  for(int idx = size - 1; idx >= 0; idx--)
+  {
+    unsigned lit = trail[idx];
+
+    // if index(lit) is not in important
+    if (projected && important[index(lit)] == 0)
+    {
+      continue;
+    }
+    else{
+      if (levels[index(lit)] > M){
+        M = levels[index(lit)];
+        lit_to_flip = lit;
+      }
+      continue;
+    }
+    
+  }
+  return M;
+}
+
 
 mpz_class Solver::get_models_covered_by_assignment(unsigned length)
 {
   mpz_class models_per_assignment = 0;
-  mpz_ui_pow_ui(models_per_assignment.get_mpz_t(), 2, variables - length);
+  if (!projected)
+    mpz_ui_pow_ui(models_per_assignment.get_mpz_t(), 2, variables - length);
+  else
+    mpz_ui_pow_ui(models_per_assignment.get_mpz_t(), 2, projected_count - length);
   return models_per_assignment;
+}
+
+int Solver::to_dimacs(unsigned lit){
+  int idx = index(lit) + 1;
+  if (lit % 2 == 1)
+    idx = -idx;
+  return idx;
 }
 
 State Solver::cdcl()
@@ -1818,6 +2310,28 @@ State Solver::cdcl()
   options.backjump_limit = 0;
   mpz_class model_count = 0;
   mpz_class assignments_count = 0;
+
+  std::ostream* outfile = nullptr; // Pointer to the output stream
+
+  if (options.output_file.value == 0) {
+    // If output_file is empty, print to stdout
+    outfile = &std::cout;
+  } else {
+    // Otherwise, open the specified file and write to it
+    std::ofstream* file_stream = new std::ofstream("output.txt");
+    if (file_stream->is_open()) {
+      outfile = file_stream;
+    } else {
+      std::cerr << "Error: Could not open file " << options.output_file.value << " for writing." << std::endl;
+      exit(-2);
+    }
+  }
+
+
+  // std::ofstream outfile("../../../../data/datasets/output_projected.txt");
+  //std::ofstream outfile("output_projected.txt");
+
+
   for (;;)
   {
     unsigned falsified;
@@ -1826,7 +2340,7 @@ State Solver::cdcl()
     {
       if (!analyze_conflict(falsified, conflict))
       {
-        if (model_count_flag)
+        if (true)
           {
             printf("s MODEL COUNT\n");
             gmp_printf("%Zd\n", model_count);
@@ -1844,42 +2358,65 @@ State Solver::cdcl()
         options.restart = 0;
         assignments_count++;
         statistics.n_assignments_partial++;
+
         unsigned M;
         bool endTrue;
-        M = get_implicant_lifting();
+
+        if (!enumerate_total){
+          M = get_aggressive_projected_implicant_lifting_bis();
+          M = get_projection_lifting();
+        }
+        else{
+          if (projected){
+            M = get_projection_lifting();
+          }
+          else{
+            M = level;
+          }
+        }
 
         debug("CURRENT M: %d", M);
         
         if (level > M)
           backtrack(M);
-
         
         if (!model_count_flag && !assignment_count_flag)
         {
           for (unsigned i = 0; i < trail.size() ; i++)
           {
             unsigned lit = trail[i];
-            int idx = index(lit) + 1;
-            if (lit % 2 == 1)
-              idx = -idx;
-            printf("%d", idx);
-            if (reasons[index(lit)] == DECISION_REASON)
-              printf("(d)");
-            if (reasons[index(lit)] == BACKTRUE_REASON)
-              printf("(*)");
-            if (reasons[index(lit)] == UNIT_REASON)
-              printf("(u)");
-            printf(" ");
+            int idx = to_dimacs(lit);
+
+            // If not important in projected, skip it
+            if (projected && important[index(lit)] == 0)
+              continue;
+
+            (*outfile) << idx;
+            (*outfile) << " ";
           }
-          printf("\n");
+          (*outfile) << "\n";
+          outfile->flush();
         }
-          
-        model_count += get_models_covered_by_assignment(trail.size());      
-        
+
+        if(!projected)
+          model_count += get_models_covered_by_assignment(trail.size());
+        else
+        {
+          unsigned projected_counter = 0;
+
+          for (unsigned i = 0; i < trail.size(); i++)
+          {
+            unsigned lit = trail[i];
+            if (important[index(lit)] == 1)
+              projected_counter += 1;
+          }
+
+          model_count += get_models_covered_by_assignment(projected_counter);  
+        }    
         endTrue = block_chrono(M);
         if (inconsistent || endTrue)
         {
-          if (model_count_flag)
+          if (true)
           {
             printf("s MODEL COUNT\n");
             gmp_printf("%Zd\n", model_count);
@@ -1919,11 +2456,11 @@ void Solver::initialize_internal_solving()
   double alpha = options.vsids_decay / 1000.0, decay = 1 - alpha;
   if (!added_original_clauses)
   {
-    printf("NUMBER SATISFYING ASSIGNMENTS\n");
+    printf("s MODEL COUNT\n");
     gmp_printf("%Zd\n", get_models_covered_by_assignment(0));
     exit(20);
   }
-  heap.resize(variables, DLCS, initial_watched);
+  heap.resize(variables, DLCS, initial_watched, important);
   heap.set_decay(decay);
   message(1, "setting VSIDS decay to %g "
              "(alpha specified as %g = %u/1000)",
@@ -1937,7 +2474,7 @@ State Solver::solve_internally()
   State res;
   if (inconsistent)
   {
-    printf("NUMBER SATISFYING ASSIGNMENTS\n0");
+    printf("s MODEL COUNT\n0\n");
     return UNSATISFIABLE;
   }
   else
