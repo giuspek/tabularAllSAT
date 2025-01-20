@@ -1836,8 +1836,6 @@ unsigned Solver::get_aggressive_projected_implicant_lifting_bis(){
       continue;
     }
 
-    copy_trail.erase(copy_trail.begin() + idx);
-
     auto &not_lit_watches = matrix[lit];
     auto begin_not_lit_watches = not_lit_watches.begin();
     auto end_not_lit_watches = not_lit_watches.end();
@@ -1855,7 +1853,7 @@ unsigned Solver::get_aggressive_projected_implicant_lifting_bis(){
         // Binary clause: other is for sure in implicant
         unsigned other = untag(watch);
         signed char other_value = values[other];
-        if (other_value <= 0 || std::find(copy_trail2.begin(), copy_trail2.end(), other) == copy_trail2.end())
+        if (other_value <= 0 || std::find(copy_trail.begin(), copy_trail.end(), other) == copy_trail.end())
         {
           trail_minimal_set.insert(lit);
           one_binary_require_lit = true;
@@ -1886,6 +1884,7 @@ unsigned Solver::get_aggressive_projected_implicant_lifting_bis(){
     }
 
     if (!one_clause_require_lit){
+      copy_trail.erase(copy_trail.begin() + idx);
       for (auto ref : W[lit]){
         N[ref]--;
       }
