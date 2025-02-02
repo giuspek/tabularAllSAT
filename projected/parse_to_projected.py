@@ -51,8 +51,8 @@ def process_file(input_file, output_folder):
     # Create the output file path
     output_file = os.path.join(output_folder, os.path.basename(input_file).replace('.smt2', '.cnf'))
     with open(output_file, "w") as f:
-        f.write("p cnf " + str(len(atom_to_dimacs)) + " " + str(n_clauses) + "\n")
-        f.write("c p show " + " ".join([str(i) for i in range(1, len(atoms) + 1)]) + " 0\n")
+        f.write("p cnf " + str(len(atom_to_dimacs)) + " " + str(n_clauses) + " " + str(len(atoms)) + "\n")
+        f.write("c p show " + " ".join([str(i) for i in range(1, len(atoms) + 1)]) + "\n")
         for c in phi_cnf.args():
             if len(c.args()) < 2:
                 if c.is_not():
