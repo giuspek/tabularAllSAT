@@ -1240,7 +1240,7 @@ bool Solver::analyze_conflict(unsigned falsified, Reference reason)
     }
   }
 
-  aggressive_level_limit = level;
+  aggressive_level_limit = level < aggressive_level_limit ? level : aggressive_level_limit;
   
   bump_analyzed_variables();
 
