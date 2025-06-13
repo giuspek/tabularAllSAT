@@ -163,7 +163,7 @@ struct Statistics
   uint64_t simplifications;
   mpz_class n_assignments_partial;
 
-  Statistics() { memset(this, 0, sizeof *this); }
+  Statistics() = default;
 
   double average(double a, double b) { return b ? a / b : 0; }
   double percent(double a, double b) { return average(100 * a, b); }
