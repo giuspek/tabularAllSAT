@@ -13,6 +13,7 @@ const char * basic_usage =
 "  -e                 print number of assignments retrieved\n"
 "  -q | --quiet       disable all messages\n"
 "  -v | --verbose     increase verbosity\n"
+"  --enum_total       print total models"
 "\n"
 "  -t <seconds>       set time limit\n"
 "\n"
@@ -882,6 +883,8 @@ int Shared::main (int argc, char ** argv) {
       model_count_flag = true;
     else if (!strcmp (arg, "--total-length"))
       debug_info = 1;
+    else if (!strcmp (arg, "--enum_total"))
+      enumeration_total_flag = true;
     else if (!strcmp (arg, "-e"))
       assignment_count_flag = true;
     else if (!strcmp (arg, "--version")) {

@@ -313,6 +313,7 @@ protected:                      // Code used by each solver variant.
   bool model_count_flag = false;
   char debug_info = 0;
   bool assignment_count_flag = false;
+  bool enumeration_total_flag = false;
   bool projected = false;
   unsigned projected_count = 0;
   std::vector<unsigned> DLCS;

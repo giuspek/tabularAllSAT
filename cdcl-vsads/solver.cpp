@@ -2326,6 +2326,9 @@ State Solver::cdcl()
     }
   }
 
+  if (enumeration_total_flag)
+    enumerate_total = true;
+
 
   // std::ofstream outfile("../../../../data/datasets/output_projected.txt");
   //std::ofstream outfile("output_projected.txt");
