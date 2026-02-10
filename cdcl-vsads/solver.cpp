@@ -144,24 +144,24 @@ struct Average
 struct Statistics
 {
 
-  uint64_t added_clauses;
-  uint64_t original_clauses;
-  uint64_t analyzed;
-  uint64_t chronological;
-  uint64_t conflicts;
-  uint64_t decisions;
-  uint64_t deduced_literals;
-  unsigned fixed;
-  uint64_t learned_literals;
-  uint64_t propagations;
-  uint64_t recycled_clauses;
-  uint64_t reductions;
-  uint64_t redundant_clauses;
-  uint64_t rephased;
-  uint64_t reported;
-  uint64_t restarts;
-  uint64_t simplifications;
-  mpz_class n_assignments_partial;
+  uint64_t added_clauses = 0;
+  uint64_t original_clauses = 0;
+  uint64_t analyzed = 0;
+  uint64_t chronological = 0;
+  uint64_t conflicts = 0;
+  uint64_t decisions = 0;
+  uint64_t deduced_literals = 0;
+  unsigned fixed = 0;
+  uint64_t learned_literals = 0;
+  uint64_t propagations = 0;
+  uint64_t recycled_clauses = 0;
+  uint64_t reductions = 0;
+  uint64_t redundant_clauses = 0;
+  uint64_t rephased = 0;
+  uint64_t reported = 0;
+  uint64_t restarts = 0;
+  uint64_t simplifications = 0;
+  mpz_class n_assignments_partial = 0;
 
   Statistics() = default;
 
